@@ -4,33 +4,25 @@ import argparse
 import time
 import re
 import numpy as np
+import json
+import yt_dlp
+import argparse
+import multiprocessing
+from functools import partial
+from contextlib import contextmanager
+from tqdm import tqdm
 
+@contextmanager
+def poolcontext(*args, **kwargs):
+    pool = multiprocessing.Pool(*args, **kwargs)
+    yield pool
+    pool.terminate()
 
-# def select_lowres_formats(youtube_ids):
-#     done = [l.split()[0] for l in open('scraping/download_formats.txt')]
-#     with open('scraping/download_formats.txt', 'a+') as f:
-#         for ii, yid in enumerate(youtube_ids):
-#             if yid in done:
-#                 continue
-#             url = 'https://www.youtube.com/watch?v=' + yid
-#             print '{}/{}: {}'.format(ii, len(youtube_ids), url)
-                
-#             try:
-#                 data_fmt = os.popen('youtube-dl -F "{}"'.format(url)).read().splitlines()
-#                 data_fmt = [l.split() for l in data_fmt]
-#                 data_fmt = [l for l in data_fmt if l[0].isdigit() and l[1] == 'mp4']
-#                 width = np.array([float(l[2].split('x')[0]) for l in data_fmt])
-#                 width[width<450] = np.inf
-#                 video_fmt = data_fmt[np.argmin(width)][0]
-#                 print yid, ' '.join(data_fmt[np.argmin(width)])
-#                 f.write('{} {}\n'.format(yid, video_fmt))
-#             except Exception:
-#                 print 'Error downloading', yid
-#                 open('scraping/download_errors.txt', 'a').write(yid+'\n')
-
+def update_progress(*a):
+    pbar.update()
 
 def download_video(url, fmt, video_dir):
-    cmd = ['youtube-dl', '--ignore-errors', 
+    cmd = ['yt-dlp', '--ignore-errors', 
            '--download-archive', 'scraping/downloaded_video.txt', 
            '--format', fmt, 
            '-o', '"{}/%(id)s.video.%(ext)s"'.format(video_dir),
@@ -39,13 +31,22 @@ def download_video(url, fmt, video_dir):
 
 
 def download_audio(url, fmt, audio_dir):
-    cmd = ['youtube-dl', '--ignore-errors', 
+    cmd = ['yt-dlp', '--ignore-errors', 
            '--download-archive', 'scraping/downloaded_audio.txt', 
            '--format', fmt, 
            '-o', '"{}/%(id)s.audio.f%(format_id)s.%(ext)s"'.format(audio_dir),
            '"{}"'.format(url)]
     os.system(' '.join(cmd))
 
+def download_video_audio(args):
+    yid, video_fmt, audio_fmt, output_dir = args
+    if yid not in video_fmt or yid not in audio_fmt:
+        return
+    url = 'https://www.youtube.com/watch?v=' + yid
+    
+    download_video(url, video_fmt[yid], output_dir)
+    download_audio(url, audio_fmt[yid], output_dir)
+    time.sleep(1)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -61,13 +62,9 @@ if __name__ == '__main__':
     else:
       video_fmt = {l.split()[0]: l.strip().split()[1] for l in list(open('scraping/video_formats.txt'))}
 
-    for ii, yid in enumerate(youtube_ids):
-        if yid not in video_fmt or yid not in audio_fmt:
-            continue
-            
-        url = 'https://www.youtube.com/watch?v=' + yid
-        print('{}/{}: {}'.format(ii, len(youtube_ids), url))
-
-        download_video(url, video_fmt[yid], args.output_dir)
-        download_audio(url, audio_fmt[yid], args.output_dir)
-        time.sleep(1)
+    tasks = [(yid, video_fmt, audio_fmt, args.output_dir) for yid in youtube_ids]
+    with poolcontext(processes=7) as pool:
+        pbar = tqdm(total=len(tasks))
+        for _ in pool.imap_unordered(download_video_audio, tasks):
+            update_progress()
+    pbar.close()

@@ -48,7 +48,7 @@ def extract_clip(inp_fn, out_fn, rate=10, seek=None, duration=None):
     stdout, stderr = runSystemCMD(' '.join(cmd))
     if any([l.startswith('Output file is empty,')
             for l in stderr.split('\n')]):
-        raise ValueError, 'Output file is empty.\n' + stderr
+        raise ValueError('Output file is empty.\n' + stderr)
 
 
 def my_interp2(data, x, y, pts):
@@ -123,8 +123,11 @@ def gen_eac2eqr_maps(eac_shape, eqr_shape, stereopsis='MONO'):
         eac_grid = np.rot90(eac_grid[:, :eac_shape[1]/2, :], -1)
 
     # Split faces
-    hs = eac_grid.shape[0]/2
-    ws = eac_grid.shape[1]/3
+    # hs = eac_grid.shape[0]/2
+    # ws = eac_grid.shape[1]/3
+    hs = int(np.floor(eac_grid.shape[0]/2))
+    ws = int(np.floor(eac_grid.shape[1]/3)) 
+    
     face_dims = (min(hs, ws), min(hs, ws))
     faces = ['left', 'front', 'right', 'top', 'back', 'bottom']
     eac_grid = {'left': my_imresize(eac_grid[:hs, :ws, :], face_dims),

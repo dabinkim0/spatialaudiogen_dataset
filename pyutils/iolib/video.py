@@ -8,11 +8,11 @@ IMAGEIO = 1
 FFMPEG = 2
 BACKENDS = {'opencv': OPENCV, 'imageio': IMAGEIO, 'ffmpeg': FFMPEG}
 
-
 def getFFprobeMeta(fn):
     cmd = 'ffprobe -hide_banner -loglevel panic ' + fn + ' -show_streams'
     log, _ = runSystemCMD(cmd)
 
+    log = log.decode('utf-8')
     log = log.split('\n')
     start_stream = [i for i, l in enumerate(log) if l == '[STREAM]']
     end_stream = [i for i, l in enumerate(log) if l == '[/STREAM]']
@@ -66,7 +66,7 @@ class BasicVideoReader:
             self._raw_duration = self._raw_frames / float(self._raw_fps)
 
         else:
-            raise ValueError, 'Backend not supported'
+            raise ValueError('Backend not supported')
 
         if duration is not None:
             self.end_time = min(duration + seek, self._raw_duration)
@@ -316,7 +316,7 @@ class VideoWriter:
                                              quality=quality)
 
         else:
-            raise ValueError, 'Backend not supported'
+            raise ValueError('Backend not supported')
 
     def __del__(self):
         if self.backend == IMAGEIO:
@@ -350,8 +350,8 @@ def test_basic_reader():
         plt.show()
         start_time = time.time()
 
-    print 'Done'
-    print reader.time
+    print('Done')
+    print(reader.time)
 # test_basic_reader()
 
 

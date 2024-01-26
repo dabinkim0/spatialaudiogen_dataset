@@ -3,36 +3,44 @@ import scipy.signal
 import numpy as np
 from pyutils.iolib.video import getFFprobeMeta
 from pyutils.cmd import runSystemCMD
-from scikits.audiolab import Sndfile, Format
+# from scikits.audiolab import Sndfile, Format
+import librosa
+import soundfile as sf
 import tempfile
 import resampy
 
 
+# def load_wav(fname, rate=None):
+#     fp = Sndfile(fname, 'r')
+#     _signal = fp.read_frames(fp.nframes)
+#     _signal = _signal.reshape((-1, fp.channels))
+#     _rate = fp.samplerate
+
+#     if _signal.ndim == 1:
+#         _signal.reshape((-1, 1))
+#     if rate is not None and rate != _rate:
+#         # _num_frames = _signal.shape[0]
+#         # _duration = _num_frames / float(_rate)
+#         # signal = scipy.signal.resample(_signal, int(rate * _duration))
+#         signal = resampy.resample(_signal, _rate, rate, axis=0, filter='kaiser_fast')
+#     else:
+#         signal = _signal
+#         rate = _rate
+
+#     return signal, rate
+
 def load_wav(fname, rate=None):
-    fp = Sndfile(fname, 'r')
-    _signal = fp.read_frames(fp.nframes)
-    _signal = _signal.reshape((-1, fp.channels))
-    _rate = fp.samplerate
+    signal, _rate = librosa.load(fname, sr=rate, mono=False)
+    signal = signal.T  # Transpose to match the channels-first convention
+    return signal, _rate
 
-    if _signal.ndim == 1:
-        _signal.reshape((-1, 1))
-    if rate is not None and rate != _rate:
-        # _num_frames = _signal.shape[0]
-        # _duration = _num_frames / float(_rate)
-        # signal = scipy.signal.resample(_signal, int(rate * _duration))
-        signal = resampy.resample(_signal, _rate, rate, axis=0, filter='kaiser_fast')
-    else:
-        signal = _signal
-        rate = _rate
-
-    return signal, rate
-
+# def save_wav(fname, signal, rate):
+#     fp = Sndfile(fname, 'w', Format('wav'), signal.shape[1], rate)
+#     fp.write_frames(signal)
+#     fp.close()
 
 def save_wav(fname, signal, rate):
-    fp = Sndfile(fname, 'w', Format('wav'), signal.shape[1], rate)
-    fp.write_frames(signal)
-    fp.close()
-
+    sf.write(fname, signal.T, rate)
 
 def convert2wav(inp_fn, out_fn, rate=None):
     cmd = ['ffmpeg', '-y',
@@ -46,16 +54,21 @@ def convert2wav(inp_fn, out_fn, rate=None):
     stdout, stderr = runSystemCMD(' '.join(cmd))
     if any([l.startswith('Output file is empty,')
             for l in stderr.split('\n')]):
-        raise ValueError, 'Output file is empty.\n' + stderr
+        raise ValueError('Output file is empty.\n' + stderr)
 
 
 class AudioReader:
     def __init__(self, fn, rate=None, pad_start=0, seek=None, duration=None, rotation=None):
-        fp = Sndfile(fn, 'r') if fn.endswith('.wav') else None
-        if fp is None or (rate is not None and fp.samplerate != rate):
-            # Convert to wav file
-            if not os.path.isdir('/tmp/'):
-                os.makedirs('/tmp/')
+        self.rm_flag = False
+        self.snd_fn = fn
+        self.rate = rate
+        self.num_channels = None  # 이 값을 나중에 설정합니다.
+        self.duration = None  # 이 값도 나중에 설정합니다.
+        self.k = 0
+        self.pad = pad_start
+
+        # 파일이 .wav 확장자가 아니거나 다른 샘플링 레이트가 필요한 경우 변환합니다.
+        if not fn.endswith('.wav') or rate is not None:
             snd_file = tempfile.NamedTemporaryFile('w', prefix='/tmp/', suffix='.wav', delete=False)
             snd_file.close()
 
@@ -63,31 +76,24 @@ class AudioReader:
             self.snd_fn = snd_file.name
             self.rm_flag = True
 
-        else:
-            self.snd_fn = fn
-            self.rm_flag = False
-
-        self.fp = Sndfile(self.snd_fn, 'r')
-        self.num_channels = self.fp.channels
-        self.rate = self.fp.samplerate
-        self.num_frames = self.fp.nframes
+        # 파일 로드
+        self.signal, self.rate = load_wav(self.snd_fn, self.rate)
+        self.num_channels = self.signal.shape[1]
+        self.num_frames = self.signal.shape[0]
         self.duration = self.num_frames / float(self.rate)
 
-        self.k = 0
-        self.pad = pad_start
-
         if seek is not None and seek > 0:
-            num_frames = int(seek * self.rate)
-            self.fp.read_frames(num_frames)
-        else:
-            seek = 0
+            seek_frames = int(seek * self.rate)
+            self.signal = self.signal[seek_frames:, :]
+            self.num_frames -= seek_frames
 
         if duration is not None:
-            self.duration = min(duration, self.duration-seek)
-            self.num_frames = int(self.duration * self.rate)
+            duration_frames = int(duration * self.rate)
+            self.signal = self.signal[:duration_frames, :]
+            self.num_frames = min(self.num_frames, duration_frames)
 
         if rotation is not None:
-            assert self.num_channels > 2    # Spatial audio
+            assert self.num_channels > 2  # Spatial audio
             assert -np.pi <= rotation < np.pi
             c = np.cos(rotation)
             s = np.sin(rotation)
@@ -100,8 +106,64 @@ class AudioReader:
             self.rot_mtx = None
 
     def __del__(self):
-        if self.rm_flag:
+        if hasattr(self, 'rm_flag') and self.rm_flag:
             os.remove(self.snd_fn)
+    
+    # def __init__(self, fn, rate=None, pad_start=0, seek=None, duration=None, rotation=None):
+    #     fp = Sndfile(fn, 'r') if fn.endswith('.wav') else None
+    #     self.rm_flag = False
+    #     if fp is None or (rate is not None and fp.samplerate != rate):
+    #         # Convert to wav file
+    #         if not os.path.isdir('/tmp/'):
+    #             os.makedirs('/tmp/')
+    #         snd_file = tempfile.NamedTemporaryFile('w', prefix='/tmp/', suffix='.wav', delete=False)
+    #         snd_file.close()
+
+    #         convert2wav(fn, snd_file.name, rate)
+    #         self.snd_fn = snd_file.name
+    #         self.rm_flag = True
+
+    #     else:
+    #         self.snd_fn = fn
+    #         self.rm_flag = False
+
+    #     self.fp = Sndfile(self.snd_fn, 'r')
+    #     self.num_channels = self.fp.channels
+    #     self.rate = self.fp.samplerate
+    #     self.num_frames = self.fp.nframes
+    #     self.duration = self.num_frames / float(self.rate)
+
+    #     self.k = 0
+    #     self.pad = pad_start
+
+    #     if seek is not None and seek > 0:
+    #         num_frames = int(seek * self.rate)
+    #         self.fp.read_frames(num_frames)
+    #     else:
+    #         seek = 0
+
+    #     if duration is not None:
+    #         self.duration = min(duration, self.duration-seek)
+    #         self.num_frames = int(self.duration * self.rate)
+
+    #     if rotation is not None:
+    #         assert self.num_channels > 2    # Spatial audio
+    #         assert -np.pi <= rotation < np.pi
+    #         c = np.cos(rotation)
+    #         s = np.sin(rotation)
+    #         rot_mtx = np.array([[1, 0, 0, 0],       # W' = W
+    #                             [0, c, 0, s],       # Y' = X sin + Y cos
+    #                             [0, 0, 1, 0],       # Z' = Z
+    #                             [0, -s, 0, c]])     # X' = X cos - Y sin
+    #         self.rot_mtx = rot_mtx
+    #     else:
+    #         self.rot_mtx = None
+    # 
+    # def __del__(self):
+    #     # if self.rm_flag:
+    #     #     os.remove(self.snd_fn)
+    #     if hasattr(self, 'rm_flag') and self.rm_flag:
+    #         os.remove(self.snd_fn)  
 
     def get_chunk(self, n=1, force_size=False):
         if self.k >= self.num_frames:
@@ -142,19 +204,18 @@ class AudioReader:
             yield chunk
 
 class AudioReader2:
-    def __init__(self, audio_folder, rate=None,
-                 seek=0, duration=None, rotation=None):
+    def __init__(self, audio_folder, rate=None, seek=0, duration=None, rotation=None):
         self.audio_folder = audio_folder
 
         fns = os.listdir(audio_folder)
         self.num_files = len(fns)
 
-        fp = Sndfile(os.path.join(self.audio_folder, fns[0]), 'r')
+        # 첫 번째 파일을 사용하여 샘플링 레이트 및 채널 수를 결정합니다.
         data, fps = load_wav(os.path.join(self.audio_folder, fns[0]))
-        self.rate = float(fp.samplerate) if rate is not None else fps
-        self.num_channels = fp.channels
+        self.rate = rate if rate is not None else fps
+        self.num_channels = data.shape[1]  # 수정: 채널 수는 data의 두 번째 차원입니다.
         self.duration = self.num_files
-        self.num_frames = int(self.duration * rate)
+        self.num_frames = int(self.duration * self.rate)
 
         self.cur_frame = int(seek * self.rate)
         self.time = self.cur_frame / self.rate
@@ -163,16 +224,16 @@ class AudioReader2:
         if duration is not None:
             self.max_time = min(seek + duration, self.max_time)
 
+        # 회전 매트릭스 설정 (공간 오디오용)
+        self.rot_mtx = None
         if rotation is not None:
-            assert self.num_channels > 2  # Spatial audio
-            assert -np.pi <= rotation < np.pi
+            assert self.num_channels > 2
             c = np.cos(rotation)
             s = np.sin(rotation)
-            rot_mtx = np.array([[1, 0, 0, 0],  # W' = W
-                                [0, c, 0, s],  # Y' = X sin + Y cos
-                                [0, 0, 1, 0],  # Z' = Z
-                                [0, -s, 0, c]])  # X' = X cos - Y sin
-            self.rot_mtx = rot_mtx
+            self.rot_mtx = np.array([[1, 0, 0, 0],
+                                     [0, c, 0, s],
+                                     [0, 0, 1, 0],
+                                     [0, -s, 0, c]])
         else:
             self.rot_mtx = None
 

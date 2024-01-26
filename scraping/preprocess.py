@@ -9,7 +9,13 @@ from pyutils.iolib.audio import save_wav, AudioReader
 from pyutils.iolib.video import VideoReader
 import feeder
 import multiprocessing as mp
+from contextlib import contextmanager
 
+@contextmanager
+def poolcontext(*args, **kwargs):
+    pool = multiprocessing.Pool(*args, **kwargs)
+    yield pool
+    pool.terminate()
 
 def prepare_ambisonics(inp_fn, out_fn, inp_codec, overwrite=False):
     if overwrite and os.path.exists(out_fn):
@@ -24,7 +30,7 @@ def prepare_ambisonics(inp_fn, out_fn, inp_codec, overwrite=False):
     elif inp_codec in ('vorbis', 'opus'):
         remap = [0, 1, 2, 3]
     else:
-        raise ValueError, '{}: Unkown input codec: {}.'.format(inp_fn, inp_codec)
+        raise ValueError('{}: Unknown input codec: {}.'.format(inp_fn, inp_codec))
     cmd += ' -af "pan=4c|c0=c{}|c1=c{}|c2=c{}|c3=c{}"'.format(*remap)
     cmd += ' "{}"'.format(out_fn)
     
